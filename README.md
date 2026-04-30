@@ -10,7 +10,7 @@
 
 네가 `git clone https://github.com/shh444/auto_research.git`로 받은 바로 그 폴더가 루트입니다. 공식 Paperclip repo 안으로 파일을 옮길 필요가 없습니다.
 
-처음 시작은 [docs/START_FROM_THIS_REPO.ko.md](docs/START_FROM_THIS_REPO.ko.md)를 먼저 보세요. 더 긴 배경 설명은 [README_START_HERE.ko.md](README_START_HERE.ko.md)에 있습니다.
+Linux 서버에서 시작한다면 [docs/LINUX_SERVER_QUICKSTART.ko.md](docs/LINUX_SERVER_QUICKSTART.ko.md)를 먼저 보세요. 로컬/일반 설명은 [docs/START_FROM_THIS_REPO.ko.md](docs/START_FROM_THIS_REPO.ko.md)에 있습니다.
 
 ## 빠른 판단
 
