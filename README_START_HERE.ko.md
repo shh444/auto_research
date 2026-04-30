@@ -427,6 +427,7 @@ docker compose exec paperclip \
 - config 파일 경로 오타
 - `cwd` 경로 오타
 - `FRONTEND_REPO_DIR`가 잘못되어 `/workspace/repo`에 repo가 안 보임
+- Paperclip 컨테이너 자체의 `working_dir`를 `/workspace/repo`로 바꾸면 안 됨. Paperclip 서버는 이미지 내부 `/app`에서 떠야 하고, process adapter의 `cwd`만 `/workspace/repo`로 둡니다.
 
 ### B. vLLM 연결 실패
 - macOS면 `host.docker.internal:8000`으로 열려 있는지 확인

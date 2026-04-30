@@ -17,5 +17,4 @@ services:
       - "${PAPERCLIP_DATA_DIR:-./data/docker-paperclip}:/paperclip"
       - "${FRONTEND_REPO_DIR:?Set FRONTEND_REPO_DIR}:/workspace/repo"
       - "./agent:/opt/agent"
-    working_dir: /workspace/repo
     shm_size: "2gb"

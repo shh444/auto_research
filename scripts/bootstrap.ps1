@@ -14,6 +14,19 @@ function Require-Command($Name) {
     }
 }
 
+function Invoke-DockerBuild($Tag, $Dockerfile, $Context) {
+    $env:DOCKER_BUILDKIT = "1"
+    docker buildx version *> $null
+    if ($LASTEXITCODE -eq 0) {
+        docker buildx build --load -t $Tag -f $Dockerfile $Context
+        if ($LASTEXITCODE -ne 0) { throw "docker buildx build failed for $Tag" }
+        return
+    }
+
+    docker build -t $Tag -f $Dockerfile $Context
+    if ($LASTEXITCODE -ne 0) { throw "docker build failed for $Tag" }
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
 
@@ -24,11 +37,15 @@ if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"
     $secret = [Convert]::ToBase64String([Guid]::NewGuid().ToByteArray()) + [Convert]::ToBase64String([Guid]::NewGuid().ToByteArray())
     $demoFrontend = (Join-Path $RepoRoot "examples/demo-frontend").Replace("\", "/")
+    $paperclipData = (Join-Path $RepoRoot ".paperclip-data").Replace("\", "/")
+    $hfCache = (Join-Path $RepoRoot ".hf-cache").Replace("\", "/")
     $envText = Get-Content ".env" -Raw
     $envText = $envText -replace "BETTER_AUTH_SECRET=replace-this-with-a-long-random-string", "BETTER_AUTH_SECRET=$secret"
     $envText = $envText -replace "FRONTEND_REPO_DIR=/absolute/path/to/your-frontend-repo", "FRONTEND_REPO_DIR=$demoFrontend"
+    $envText = $envText -replace "PAPERCLIP_DATA_DIR=./data/docker-paperclip", "PAPERCLIP_DATA_DIR=$paperclipData"
+    $envText = $envText -replace "HF_CACHE_DIR=/absolute/path/to/your-huggingface-cache", "HF_CACHE_DIR=$hfCache"
     Set-Content ".env" $envText -NoNewline
-    Write-Host "Created .env from .env.example and pointed FRONTEND_REPO_DIR at examples/demo-frontend."
+    Write-Host "Created .env from .env.example and pointed runtime data/cache paths at this workspace."
 }
 
 if (-not (Test-Path $PaperclipDir)) {
@@ -41,12 +58,12 @@ git -C $PaperclipDir checkout $PaperclipRef
 
 if (-not $SkipPaperclipBuild) {
     Write-Host "Building paperclip-local from $PaperclipDir ..."
-    docker build -t paperclip-local $PaperclipDir
+    Invoke-DockerBuild "paperclip-local" (Join-Path $PaperclipDir "Dockerfile") $PaperclipDir
 }
 
 if (-not $SkipAgentBuild) {
     Write-Host "Building paperclip-local-agent from this auto_research repo ..."
-    docker build -t paperclip-local-agent -f Dockerfile.paperclip-agent .
+    Invoke-DockerBuild "paperclip-local-agent" "Dockerfile.paperclip-agent" "."
 }
 
 Write-Host ""
