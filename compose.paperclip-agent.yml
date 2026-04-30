@@ -2,19 +2,22 @@ services:
   paperclip:
     image: paperclip-local-agent:latest
     container_name: paperclip
-    ports:
-      - "${PAPERCLIP_PORT:-3100}:3100"
+    network_mode: host
     environment:
-      HOST: "0.0.0.0"
+      HOST: "127.0.0.1"
+      PORT: "${PAPERCLIP_PORT:-3100}"
+      PAPERCLIP_BIND: "loopback"
       PAPERCLIP_HOME: "/paperclip"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_MODE: "local_trusted"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_BASE_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
     volumes:
       - "${PAPERCLIP_DATA_DIR:-./data/docker-paperclip}:/paperclip"
       - "${FRONTEND_REPO_DIR:?Set FRONTEND_REPO_DIR}:/workspace/repo"
       - "./agent:/opt/agent"
+    working_dir: /app
     shm_size: "2gb"
