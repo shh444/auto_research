@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Auto Research Demo</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow">Local agent research lab</p>
+        <h1 id="hero-title">A small app for testing autonomous frontend loops</h1>
+        <p class="lede">
+          Use this demo as the first target while you tune vLLM, Paperclip,
+          browser review, and verification.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="#workspace">Open workspace</a>
+          <a class="button secondary" href="#checks">View checks</a>
+        </div>
+      </section>
+
+      <section id="workspace" class="panel" aria-labelledby="workspace-title">
+        <h2 id="workspace-title">Workspace</h2>
+        <p>
+          The agent can safely improve this page before you point it at a real
+          product repository.
+        </p>
+      </section>
+
+      <section id="checks" class="panel" aria-labelledby="checks-title">
+        <h2 id="checks-title">Checks</h2>
+        <ul>
+          <li>Console should stay clean.</li>
+          <li>Layout should work on desktop and mobile.</li>
+          <li>Build and lint scripts should pass.</li>
+        </ul>
+      </section>
+    </main>
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>

@@ -32,15 +32,15 @@
 
 ## 1. 디렉터리 배치
 
-가장 쉬운 방식은 **공식 Paperclip repo 루트**에 이 폴더의 파일들을 두는 것입니다.
+이제 가장 쉬운 방식은 **이 `auto_research` repo를 그대로 루트로 쓰는 것**입니다. 공식 Paperclip repo에 파일을 복사하지 않습니다.
+
+처음 시작은 짧은 가이드인 `docs/START_FROM_THIS_REPO.ko.md`를 따라가세요.
 
 예시:
 
 ```text
 ~/work/
-  paperclip/                  # 공식 paperclip repo
-    Dockerfile                # 공식 repo 파일
-    docker/
+  auto_research/              # 이 repo
     compose.paperclip-agent.yml
     compose.vllm.linux-gpu.yml
     Dockerfile.paperclip-agent
@@ -52,24 +52,36 @@
       paperclip_agent.frontend.mac.toml
       paperclip_agent.frontend.linux-gpu.toml
       paperclip_process_adapter.container.json
+    .external/
+      paperclip/              # bootstrap 스크립트가 자동 clone, git에는 올리지 않음
   my-frontend-app/            # 실제 수정할 프론트 repo
 ```
 
 즉:
-1. 공식 Paperclip repo를 클론합니다.
-2. 이 스타터 파일을 그 repo 루트에 넣습니다.
-3. 실제 프론트 repo는 따로 두고 bind mount로 연결합니다.
+1. `auto_research` repo를 클론합니다.
+2. `scripts/bootstrap.ps1` 또는 `scripts/bootstrap.sh`를 실행합니다.
+3. bootstrap이 공식 Paperclip을 `.external/paperclip`에 받아 빌드합니다.
+4. 실제 프론트 repo는 따로 두고 bind mount로 연결합니다.
 
 ---
 
-## 2. 공식 Paperclip repo 받기
+## 2. bootstrap 실행
 
-```bash
-git clone https://github.com/paperclipai/paperclip.git
-cd paperclip
+Windows PowerShell:
+
+```powershell
+cd C:\croft\programs\auto_research
+.\scripts\bootstrap.ps1
 ```
 
-공식 Paperclip README의 가장 빠른 시작은 현재 `npx paperclipai onboard --yes`입니다. 다만 이 스타터는 **Docker overlay** 방식이므로, 공식 repo 루트의 `Dockerfile`로 `paperclip-local` 이미지를 빌드한 뒤 이 폴더의 파일들을 공식 repo 루트에 두는 흐름을 사용합니다.
+macOS/Linux/WSL:
+
+```bash
+cd ~/croft/programs/auto_research
+bash scripts/bootstrap.sh
+```
+
+공식 Paperclip README의 가장 빠른 시작은 현재 `npx paperclipai onboard --yes`입니다. 이 스타터는 Docker overlay 방식이므로 bootstrap이 공식 repo를 `.external/paperclip`에 clone하고, 공식 `Dockerfile`로 `paperclip-local` 이미지를 빌드합니다.
 
 ---
 
@@ -107,10 +119,10 @@ VLLM_API_KEY=dev
 
 ## 4. Paperclip 기본 이미지 빌드
 
-이 단계는 공식 수동 빌드 흐름입니다.
+bootstrap을 썼다면 이 단계는 이미 끝났습니다. 수동으로 하고 싶을 때만 실행하세요.
 
 ```bash
-docker build -t paperclip-local .
+docker build -t paperclip-local .external/paperclip
 ```
 
 ---

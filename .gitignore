@@ -1,0 +1,11 @@
+.env
+.external/
+.agent_runs/
+.*_agent_runs/
+data/
+.paperclip-data/
+.hf-cache/
+agent/__pycache__/
+__pycache__/
+*.pyc
+examples/demo-frontend/dist/

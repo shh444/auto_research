@@ -8,7 +8,9 @@
 - `agent/vllm_frontend_loop.py`: Playwright로 실제 화면을 열고 콘솔 에러, 네트워크 실패, 스크린샷, 모바일/데스크톱 레이아웃 문제를 관찰하는 프론트엔드 루프
 - `agent/paperclip_frontend_agent.py`: Paperclip process adapter로 붙여 이슈, 하트비트, 산출물 업로드를 연결하는 브리지
 
-자세한 설치와 Docker 중심 실행 순서는 [README_START_HERE.ko.md](README_START_HERE.ko.md)를 먼저 보세요.
+네가 `git clone https://github.com/shh444/auto_research.git`로 받은 바로 그 폴더가 루트입니다. 공식 Paperclip repo 안으로 파일을 옮길 필요가 없습니다.
+
+처음 시작은 [docs/START_FROM_THIS_REPO.ko.md](docs/START_FROM_THIS_REPO.ko.md)를 먼저 보세요. 더 긴 배경 설명은 [README_START_HERE.ko.md](README_START_HERE.ko.md)에 있습니다.
 
 ## 빠른 판단
 
@@ -37,6 +39,22 @@ python agent/vllm_frontend_loop.py \
   --config agent/paperclip_agent.frontend.linux-gpu.toml \
   --task-file agent/manual_task.example.md
 ```
+
+## Bootstrap
+
+Windows PowerShell:
+
+```powershell
+.\scripts\bootstrap.ps1
+```
+
+macOS/Linux/WSL:
+
+```bash
+bash scripts/bootstrap.sh
+```
+
+이 스크립트는 `.external/paperclip`에 공식 Paperclip을 clone하고, `paperclip-local`과 `paperclip-local-agent` Docker 이미지를 빌드합니다.
 
 검증 성공 시 원본 repo에 패치를 적용하려면:
 
