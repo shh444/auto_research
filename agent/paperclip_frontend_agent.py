@@ -765,6 +765,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--api-key", help="Paperclip API key or run JWT. Defaults to PAPERCLIP_API_KEY.")
     parser.add_argument("--wake-reason", help="Override PAPERCLIP_WAKE_REASON.")
     parser.add_argument("--wake-comment-id", help="Override PAPERCLIP_WAKE_COMMENT_ID.")
+    parser.add_argument("--apply-on-success", action="store_true", help="Apply the verified final patch back to the source Git repository.")
     parser.add_argument("--print-example-process-adapter", action="store_true", help="Print a sample Paperclip process adapter config and exit.")
     return parser.parse_args(argv)
 
@@ -796,9 +797,15 @@ def main(argv: list[str] | None = None) -> int:
     repo = pathlib.Path(args.repo).resolve() if args.repo else pathlib.Path.cwd().resolve()
     config_path = pathlib.Path(args.config).resolve() if args.config else None
     runs_dir = pathlib.Path(args.runs_dir).resolve() if args.runs_dir else None
+    configured_paperclip = PaperclipConfig()
+    if config_path is not None:
+        try:
+            _, _, _, configured_paperclip = load_config(config_path)
+        except Exception:
+            configured_paperclip = PaperclipConfig()
 
-    api_url = args.api_url or os.environ.get("PAPERCLIP_API_URL")
-    api_key = args.api_key or os.environ.get("PAPERCLIP_API_KEY")
+    api_url = args.api_url or os.environ.get("PAPERCLIP_API_URL") or configured_paperclip.api_url
+    api_key = args.api_key or os.environ.get("PAPERCLIP_API_KEY") or configured_paperclip.api_key
     company_id = args.company_id or os.environ.get("PAPERCLIP_COMPANY_ID")
     run_id = args.run_id or os.environ.get("PAPERCLIP_RUN_ID") or f"manual-run-{int(time.time())}"
     issue_id = args.issue_id or os.environ.get("PAPERCLIP_TASK_ID")
@@ -830,6 +837,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         runner = PaperclipRunner(repo=repo, config_path=config_path, runs_dir=runs_dir, context=context)
+        if args.apply_on_success:
+            runner.base_config.apply_patch_on_success = True
         result = runner.run()
         print(core.pretty_json(result))
         return 0

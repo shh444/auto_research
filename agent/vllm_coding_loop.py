@@ -255,6 +255,7 @@ class AgentConfig:
     request_timeout_sec: int = 600
     max_cycles: int = 6
     max_tool_steps: int = 40
+    apply_patch_on_success: bool = False
     read_chunk_lines: int = 220
     max_file_bytes: int = 120_000
     max_context_chars: int = 60_000
@@ -295,6 +296,13 @@ class AgentConfig:
             max_cycles=int(deep_get(agent, "max_cycles", default=cls.max_cycles)),
             max_tool_steps=int(
                 deep_get(agent, "max_tool_steps", default=cls.max_tool_steps)
+            ),
+            apply_patch_on_success=bool(
+                deep_get(
+                    agent,
+                    "apply_patch_on_success",
+                    default=cls.apply_patch_on_success,
+                )
             ),
             read_chunk_lines=int(
                 deep_get(agent, "read_chunk_lines", default=cls.read_chunk_lines)
@@ -470,6 +478,7 @@ class Workspace:
             if tracked_diff.stdout.strip():
                 apply_patch_to_worktree(worktree_root, tracked_diff.stdout)
             copy_untracked_files(git_top, worktree_root, ignore_globs)
+            baseline_commit = create_baseline_commit(worktree_root)
             rel = repo_path.relative_to(git_top)
             workdir = worktree_root / rel
             logger.log(
@@ -479,6 +488,7 @@ class Workspace:
                     "source_root": str(git_top),
                     "workspace_root": str(worktree_root),
                     "workdir": str(workdir),
+                    "baseline_commit": baseline_commit,
                 },
             )
             return cls(git_top, workdir, worktree_root, "git_worktree", logger, ignore_globs)
@@ -521,6 +531,58 @@ class Workspace:
             return
         patch_text = build_text_patch(self.source_root, self.workdir, self.ignore_globs)
         patch_path.write_text(patch_text, encoding="utf-8")
+
+    def apply_patch_to_source(self, patch_path: pathlib.Path) -> dict[str, Any]:
+        patch_text = patch_path.read_text(encoding="utf-8", errors="ignore")
+        if not patch_text.strip():
+            return {"ok": True, "skipped": True, "reason": "Patch is empty"}
+        if self.mode != "git_worktree":
+            return {
+                "ok": False,
+                "reason": "apply_patch_on_success currently requires a Git repository",
+            }
+        check = run_captured(
+            [
+                "git",
+                "-C",
+                str(self.source_root),
+                "apply",
+                "--check",
+                "--whitespace=nowarn",
+                str(patch_path),
+            ]
+        )
+        if not check.ok:
+            return {
+                "ok": False,
+                "reason": "Patch did not apply cleanly to the source repository",
+                "check": check.to_dict(),
+            }
+        applied = run_captured(
+            [
+                "git",
+                "-C",
+                str(self.source_root),
+                "apply",
+                "--whitespace=nowarn",
+                str(patch_path),
+            ]
+        )
+        if not applied.ok:
+            return {
+                "ok": False,
+                "reason": "git apply failed while applying the patch",
+                "apply": applied.to_dict(),
+            }
+        self.logger.log(
+            "patch_applied_to_source",
+            {"source_root": str(self.source_root), "patch_path": str(patch_path)},
+        )
+        return {
+            "ok": True,
+            "source_root": str(self.source_root),
+            "patch_path": str(patch_path),
+        }
 
     def changed_files(self) -> list[str]:
         if self.mode == "git_worktree":
@@ -585,6 +647,42 @@ def git_toplevel(path: pathlib.Path) -> pathlib.Path | None:
 
 def run_checked(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def create_baseline_commit(worktree_root: pathlib.Path) -> str:
+    subprocess.run(
+        ["git", "-C", str(worktree_root), "add", "-A"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree_root),
+            "-c",
+            "user.name=vLLM Coding Loop",
+            "-c",
+            "user.email=vllm-coding-loop@example.invalid",
+            "commit",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "--no-verify",
+            "-m",
+            "vllm coding loop baseline",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    result = subprocess.run(
+        ["git", "-C", str(worktree_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
 
 
 def run_captured(cmd: list[str], cwd: pathlib.Path | None = None) -> CommandResult:
@@ -1485,8 +1583,26 @@ class CodingAgent:
         patch_path = self.run_root / "final.patch"
         self.workspace.write_patch(patch_path)
         changed_files = self.workspace.changed_files()
+        apply_result: dict[str, Any] | None = None
+        if status == "success" and self.config.apply_patch_on_success:
+            apply_result = self.workspace.apply_patch_to_source(patch_path)
+            if not apply_result.get("ok"):
+                status = "apply_failed"
+                reason = (
+                    "Verifier passed, but the patch could not be applied to the "
+                    f"source repository: {apply_result.get('reason')}"
+                )
+            else:
+                reason = f"{reason}; patch applied to source repository"
         report_path = self.run_root / "final_report.md"
-        report = self._render_report(status, reason, verify_results, changed_files, patch_path)
+        report = self._render_report(
+            status,
+            reason,
+            verify_results,
+            changed_files,
+            patch_path,
+            apply_result,
+        )
         report_path.write_text(report, encoding="utf-8")
         summary = {
             "status": status,
@@ -1497,6 +1613,7 @@ class CodingAgent:
             "report_path": str(report_path),
             "workspace_root": str(self.workspace.workspace_root),
             "workdir": str(self.workspace.workdir),
+            "apply_result": apply_result,
             "plans": self.plans,
             "verify_commands": self.verify_commands,
         }
@@ -1512,12 +1629,16 @@ class CodingAgent:
         verify_results: list[CommandResult],
         changed_files: list[str],
         patch_path: pathlib.Path,
+        apply_result: dict[str, Any] | None,
     ) -> str:
         verify_section = "\n\n".join(
             f"### `{result.command}`\n\n```text\n{shorten(result.stdout or result.stderr or '(no output)', 12000)}\n```\n\nExit code: {result.exit_code}"
             for result in verify_results
         )
         plan_section = pretty_json(self.plans[-10:]) if self.plans else "[]"
+        apply_section = "Not requested."
+        if apply_result is not None:
+            apply_section = f"```json\n{pretty_json(apply_result)}\n```"
         return textwrap.dedent(
             f"""
             # vLLM Coding Loop Report
@@ -1527,6 +1648,7 @@ class CodingAgent:
             - Workdir: `{self.workspace.workdir}`
             - Workspace root: `{self.workspace.workspace_root}`
             - Patch: `{patch_path}`
+            - Applied to source: `{bool(apply_result and apply_result.get("ok"))}`
 
             ## Task
 
@@ -1541,6 +1663,10 @@ class CodingAgent:
             ## Changed files
 
             {os.linesep.join(f'- `{path}`' for path in changed_files) if changed_files else '- None'}
+
+            ## Source apply result
+
+            {apply_section}
 
             ## Recent plans
 
@@ -1579,7 +1705,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Repository-aware autonomous coding loop using a vLLM OpenAI-compatible server."
     )
-    parser.add_argument("--repo", required=True, help="Repository root or project directory")
+    parser.add_argument("--repo", help="Repository root or project directory")
     parser.add_argument("--config", help="Path to TOML config file")
     parser.add_argument("--task-file", help="Path to markdown or text task file")
     parser.add_argument("--task-text", help="Inline task description")
@@ -1591,6 +1717,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--print-default-config",
         action="store_true",
         help="Print a sample config and exit",
+    )
+    parser.add_argument(
+        "--apply-on-success",
+        action="store_true",
+        help="Apply the verified final patch back to the source Git repository.",
     )
     return parser.parse_args(argv)
 
@@ -1610,6 +1741,7 @@ def default_config_toml() -> str:
         [agent]
         max_cycles = 6
         max_tool_steps = 40
+        apply_patch_on_success = false
         read_chunk_lines = 220
         max_file_bytes = 120000
         max_context_chars = 60000
@@ -1642,14 +1774,14 @@ def default_config_toml() -> str:
         [commands]
         setup = []
         verify = ["python -m pytest -q"]
-        allow_command_prefixes = null
+        allow_command_prefixes = []
         blocked_command_patterns = [
-          "(^|[;&|])\\s*sudo\\b",
-          "(^|[;&|])\\s*(shutdown|reboot|halt|poweroff)\\b",
-          "(^|[;&|])\\s*rm\\s+-rf\\s+/",
-          "(^|[;&|])\\s*(mkfs|fdisk|dd)\\b",
-          "(^|[;&|])\\s*(curl|wget)\\b.*\\|\\s*(sh|bash|zsh)\\b",
-          "(^|[;&|])\\s*git\\s+(push|reset\\s+--hard|clean\\s+-fdx|tag\\b)\\b",
+          "(^|[;&|])\\\\s*sudo\\\\b",
+          "(^|[;&|])\\\\s*(shutdown|reboot|halt|poweroff)\\\\b",
+          "(^|[;&|])\\\\s*rm\\\\s+-rf\\\\s+/",
+          "(^|[;&|])\\\\s*(mkfs|fdisk|dd)\\\\b",
+          "(^|[;&|])\\\\s*(curl|wget)\\\\b.*\\\\|\\\\s*(sh|bash|zsh)\\\\b",
+          "(^|[;&|])\\\\s*git\\\\s+(push|reset\\\\s+--hard|clean\\\\s+-fdx|tag\\\\b)\\\\b",
         ]
 
         [commands.env]
@@ -1664,6 +1796,9 @@ def main(argv: list[str] | None = None) -> int:
         print(default_config_toml())
         return 0
 
+    if not args.repo:
+        raise SystemExit("--repo is required unless --print-default-config is used")
+
     repo = pathlib.Path(args.repo).resolve()
     if not repo.exists() or not repo.is_dir():
         raise SystemExit(f"Repository path does not exist or is not a directory: {repo}")
@@ -1671,6 +1806,8 @@ def main(argv: list[str] | None = None) -> int:
     config = AgentConfig()
     if args.config:
         config = AgentConfig.from_toml(pathlib.Path(args.config))
+    if args.apply_on_success:
+        config.apply_patch_on_success = True
 
     task_text = read_task(
         task_file=pathlib.Path(args.task_file) if args.task_file else None,

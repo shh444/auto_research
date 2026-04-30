@@ -12,6 +12,7 @@ request_timeout_sec = 600
 [agent]
 max_cycles = 8
 max_tool_steps = 60
+apply_patch_on_success = false
 read_chunk_lines = 220
 max_file_bytes = 120000
 max_context_chars = 90000
@@ -82,6 +83,10 @@ viewport_height = 1024
 wait_until = "load"
 wait_after_load_ms = 1000
 action_timeout_ms = 10000
+viewports = [
+  { name = "desktop", width = 1440, height = 1024 },
+  { name = "mobile", width = 390, height = 844 },
+]
 trace_enabled = true
 screenshot_enabled = true
 full_page_screenshot = true

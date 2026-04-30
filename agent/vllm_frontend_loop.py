@@ -236,6 +236,102 @@ PERFORMANCE_SUMMARY_JS = r"""
 }
 """
 
+LAYOUT_SUMMARY_JS = r"""
+() => {
+  const clip = (value, n = 120) => String(value || "").replace(/\s+/g, " ").trim().slice(0, n);
+  const rectFor = (el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.x),
+      y: Math.round(r.y),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+      right: Math.round(r.right),
+      bottom: Math.round(r.bottom),
+    };
+  };
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity || 1) > 0.01;
+  };
+  const labelFor = (el) => {
+    const text = clip(el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.textContent || "");
+    const tag = el.tagName.toLowerCase();
+    return text ? `${tag}: ${text}` : tag;
+  };
+  const isAncestor = (a, b) => a !== b && (a.contains(b) || b.contains(a));
+  const overlapRatio = (a, b) => {
+    const left = Math.max(a.x, b.x);
+    const top = Math.max(a.y, b.y);
+    const right = Math.min(a.right, b.right);
+    const bottom = Math.min(a.bottom, b.bottom);
+    const width = Math.max(0, right - left);
+    const height = Math.max(0, bottom - top);
+    if (!width || !height) return 0;
+    const overlapArea = width * height;
+    const smallerArea = Math.max(1, Math.min(a.width * a.height, b.width * b.height));
+    return overlapArea / smallerArea;
+  };
+  const important = Array.from(document.querySelectorAll("h1,h2,h3,p,a,button,input,textarea,select,[role='button'],[role='link']"))
+    .filter(visible)
+    .slice(0, 90)
+    .map((el) => ({ el, label: labelFor(el), rect: rectFor(el) }));
+  const overlaps = [];
+  for (let i = 0; i < important.length; i += 1) {
+    for (let j = i + 1; j < important.length; j += 1) {
+      const a = important[i];
+      const b = important[j];
+      if (isAncestor(a.el, b.el)) continue;
+      const ratio = overlapRatio(a.rect, b.rect);
+      if (ratio > 0.35) {
+        overlaps.push({
+          a: a.label,
+          b: b.label,
+          ratio: Number(ratio.toFixed(2)),
+          a_rect: a.rect,
+          b_rect: b.rect,
+        });
+      }
+      if (overlaps.length >= 12) break;
+    }
+    if (overlaps.length >= 12) break;
+  }
+  const clippedText = important
+    .filter(({ el }) => {
+      const s = window.getComputedStyle(el);
+      const mayClip = s.overflow === "hidden" || s.textOverflow === "ellipsis" || s.whiteSpace === "nowrap";
+      return mayClip && (el.scrollWidth > el.clientWidth + 2 || el.scrollHeight > el.clientHeight + 2);
+    })
+    .slice(0, 12)
+    .map(({ el, label, rect }) => ({ label, rect, scroll_width: el.scrollWidth, client_width: el.clientWidth }));
+  const smallTargets = Array.from(document.querySelectorAll("a,button,input,select,textarea,[role='button'],[role='link']"))
+    .filter(visible)
+    .map((el) => ({ el, label: labelFor(el), rect: rectFor(el) }))
+    .filter(({ rect }) => rect.width < 32 || rect.height < 32)
+    .slice(0, 12)
+    .map(({ label, rect }) => ({ label, rect }));
+  const emptyActions = Array.from(document.querySelectorAll("a,button,[role='button'],[role='link']"))
+    .filter(visible)
+    .filter((el) => !clip(el.innerText || el.getAttribute("aria-label") || el.textContent || ""))
+    .slice(0, 12)
+    .map((el) => ({ tag: el.tagName.toLowerCase(), rect: rectFor(el) }));
+  return {
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scroll_width: document.documentElement.scrollWidth,
+      scroll_height: document.documentElement.scrollHeight,
+    },
+    horizontal_overflow_px: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+    overlaps,
+    clipped_text: clippedText,
+    small_interactive_targets: smallTargets,
+    empty_actions: emptyActions,
+  };
+}
+"""
+
 
 @dataclasses.dataclass
 class FrontendPageSpec:
@@ -255,6 +351,23 @@ class FrontendPageSpec:
 
 
 @dataclasses.dataclass
+class FrontendViewportSpec:
+    name: str
+    width: int
+    height: int
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FrontendViewportSpec":
+        width = int(data.get("width", data.get("viewport_width", 1440)))
+        height = int(data.get("height", data.get("viewport_height", 1024)))
+        name = str(data.get("name") or f"{width}x{height}")
+        return cls(name=name, width=width, height=height)
+
+    def to_playwright(self) -> dict[str, int]:
+        return {"width": self.width, "height": self.height}
+
+
+@dataclasses.dataclass
 class FrontendConfig:
     enabled: bool = False
     base_url: str = "http://127.0.0.1:3000"
@@ -271,6 +384,7 @@ class FrontendConfig:
     wait_until: str = "load"
     wait_after_load_ms: int = 800
     action_timeout_ms: int = 10_000
+    viewports: list[FrontendViewportSpec] = dataclasses.field(default_factory=list)
     trace_enabled: bool = True
     screenshot_enabled: bool = True
     full_page_screenshot: bool = True
@@ -289,6 +403,7 @@ class FrontendConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FrontendConfig":
         page_specs = [FrontendPageSpec.from_dict(item) for item in core.coerce_list(data.get("pages")) if isinstance(item, dict)]
+        viewport_specs = [FrontendViewportSpec.from_dict(item) for item in core.coerce_list(data.get("viewports")) if isinstance(item, dict)]
         default_paths = [str(x) for x in core.coerce_list(data.get("default_paths")) if str(x).strip()]
         if not default_paths and page_specs:
             default_paths = [page.path for page in page_specs]
@@ -311,6 +426,7 @@ class FrontendConfig:
             wait_until=str(data.get("wait_until", cls.wait_until)),
             wait_after_load_ms=int(data.get("wait_after_load_ms", cls.wait_after_load_ms)),
             action_timeout_ms=int(data.get("action_timeout_ms", cls.action_timeout_ms)),
+            viewports=viewport_specs,
             trace_enabled=bool(data.get("trace_enabled", cls.trace_enabled)),
             screenshot_enabled=bool(data.get("screenshot_enabled", cls.screenshot_enabled)),
             full_page_screenshot=bool(data.get("full_page_screenshot", cls.full_page_screenshot)),
@@ -326,6 +442,17 @@ class FrontendConfig:
             storage_state_path=str(data.get("storage_state_path")) if data.get("storage_state_path") is not None else None,
             extra_headers={str(k): str(v) for k, v in headers.items()},
         )
+
+    def effective_viewports(self) -> list[FrontendViewportSpec]:
+        if self.viewports:
+            return self.viewports
+        return [
+            FrontendViewportSpec(
+                name="default",
+                width=self.viewport_width,
+                height=self.viewport_height,
+            )
+        ]
 
 
 @dataclasses.dataclass
@@ -597,30 +724,40 @@ class FrontendHarness:
             self._ensure_playwright_available()
             server_info = self.server.ensure_started()
             selected_paths = [normalize_route(p) for p in (paths or self.default_paths())]
+            viewport_specs = (
+                [FrontendViewportSpec(name=f"{viewport['width']}x{viewport['height']}", width=viewport["width"], height=viewport["height"])]
+                if viewport
+                else self.config.effective_viewports()
+            )
             review_id = f"cycle-{cycle_idx:02d}-step-{step:02d}-{slugify(source)}"
             artifact_root = self.run_root / "frontend_artifacts" / review_id
             artifact_root.mkdir(parents=True, exist_ok=True)
             observations: list[dict[str, Any]] = []
-            for idx, route in enumerate(selected_paths, start=1):
-                spec = self.configured_page_spec(route)
-                observations.append(
-                    self._observe_single_page(
-                        route=route,
-                        spec=spec,
-                        focus=focus,
-                        cycle_idx=cycle_idx,
-                        step=step,
-                        page_index=idx,
-                        artifact_root=artifact_root,
-                        viewport=viewport,
+            page_index = 0
+            for viewport_spec in viewport_specs:
+                for route in selected_paths:
+                    page_index += 1
+                    spec = self.configured_page_spec(route)
+                    observations.append(
+                        self._observe_single_page(
+                            route=route,
+                            spec=spec,
+                            focus=focus,
+                            cycle_idx=cycle_idx,
+                            step=step,
+                            page_index=page_index,
+                            artifact_root=artifact_root,
+                            viewport=viewport_spec.to_playwright(),
+                            viewport_name=viewport_spec.name,
+                        )
                     )
-                )
             aggregate = self._aggregate_review(observations)
             result = {
                 "ok": True,
                 "source": source,
                 "focus": focus or "",
                 "paths": selected_paths,
+                "viewports": [dataclasses.asdict(item) for item in viewport_specs],
                 "artifact_root": str(artifact_root),
                 "server": server_info,
                 "aggregate": aggregate,
@@ -698,6 +835,7 @@ class FrontendHarness:
                         artifact_dir=artifact_root,
                         route=route,
                         collectors=collectors,
+                        viewport_name="action",
                     )
                 trace_path = artifact_root / "trace.zip"
                 if self.config.trace_enabled:
@@ -743,6 +881,7 @@ class FrontendHarness:
             "source": review.get("source"),
             "focus": review.get("focus"),
             "paths": review.get("paths"),
+            "viewports": review.get("viewports"),
             "aggregate": review.get("aggregate"),
             "observations": [],
         }
@@ -753,6 +892,7 @@ class FrontendHarness:
                     "path": obs.get("path"),
                     "url": obs.get("url"),
                     "title": obs.get("title"),
+                    "viewport": obs.get("viewport"),
                     "navigation_error": obs.get("navigation_error"),
                     "console_errors": obs.get("console_errors", [])[:6],
                     "page_errors": obs.get("page_errors", [])[:6],
@@ -760,6 +900,13 @@ class FrontendHarness:
                     "http_errors": obs.get("http_errors", [])[:6],
                     "issues": obs.get("issues", [])[:10],
                     "style_summary": obs.get("style_summary"),
+                    "layout_summary": {
+                        "horizontal_overflow_px": core.deep_get(obs, "layout_summary", "horizontal_overflow_px", default=0),
+                        "overlaps": core.coerce_list(core.deep_get(obs, "layout_summary", "overlaps", default=[]))[:4],
+                        "clipped_text": core.coerce_list(core.deep_get(obs, "layout_summary", "clipped_text", default=[]))[:4],
+                        "small_interactive_targets": core.coerce_list(core.deep_get(obs, "layout_summary", "small_interactive_targets", default=[]))[:4],
+                        "empty_actions": core.coerce_list(core.deep_get(obs, "layout_summary", "empty_actions", default=[]))[:4],
+                    },
                     "semantic_summary": {
                         "headings": core.coerce_list(core.deep_get(obs, "semantic_summary", "headings", default=[]))[:10],
                         "buttons": core.coerce_list(core.deep_get(obs, "semantic_summary", "buttons", default=[]))[:10],
@@ -884,9 +1031,10 @@ class FrontendHarness:
         page_index: int,
         artifact_root: pathlib.Path,
         viewport: dict[str, int] | None,
+        viewport_name: str,
     ) -> dict[str, Any]:
         page_name = spec.name or route.strip("/") or "home"
-        page_slug = f"{page_index:02d}-{slugify(page_name)}"
+        page_slug = f"{page_index:02d}-{slugify(page_name)}-{slugify(viewport_name)}"
         artifact_dir = artifact_root / page_slug
         artifact_dir.mkdir(parents=True, exist_ok=True)
         with self._browser_session(artifact_root=artifact_dir, viewport=viewport) as session:
@@ -918,6 +1066,7 @@ class FrontendHarness:
                 artifact_dir=artifact_dir,
                 route=route,
                 collectors=collectors,
+                viewport_name=viewport_name,
             )
             observation["navigation_error"] = navigation_error
             if navigation_error:
@@ -942,6 +1091,7 @@ class FrontendHarness:
         artifact_dir: pathlib.Path,
         route: str,
         collectors: dict[str, list[Any]],
+        viewport_name: str,
     ) -> dict[str, Any]:
         title = safe_call(lambda: page.title(), default="")
         url = safe_call(lambda: page.url, default=absolutize_url(self.config.base_url, route))
@@ -955,6 +1105,7 @@ class FrontendHarness:
         semantic_summary = safe_call(lambda: page.evaluate(SEMANTIC_SUMMARY_JS), default={}) or {}
         style_summary = safe_call(lambda: page.evaluate(STYLE_SUMMARY_JS), default={}) or {}
         performance_summary = safe_call(lambda: page.evaluate(PERFORMANCE_SUMMARY_JS), default=None)
+        layout_summary = safe_call(lambda: page.evaluate(LAYOUT_SUMMARY_JS), default={}) or {}
         screenshot_path = None
         screenshot_error = None
         if self.config.screenshot_enabled:
@@ -972,6 +1123,7 @@ class FrontendHarness:
             body_text=body_text or "",
             semantic_summary=semantic_summary,
             style_summary=style_summary,
+            layout_summary=layout_summary,
             console_errors=collectors["console_errors"],
             page_errors=collectors["page_errors"],
             failed_requests=collectors["failed_requests"],
@@ -987,6 +1139,7 @@ class FrontendHarness:
                 url=url,
                 semantic_summary=semantic_summary,
                 style_summary=style_summary,
+                layout_summary=layout_summary,
                 current_issues=issues,
             )
             parsed = vision_review.get("parsed") if isinstance(vision_review, dict) else None
@@ -999,11 +1152,17 @@ class FrontendHarness:
             "path": normalize_route(route),
             "url": url,
             "title": title,
+            "viewport": {
+                "name": viewport_name,
+                "width": core.deep_get(layout_summary, "viewport", "width", default=None),
+                "height": core.deep_get(layout_summary, "viewport", "height", default=None),
+            },
             "focus": focus or "",
             "body_text_excerpt": body_text_excerpt,
             "html_excerpt": html_excerpt,
             "semantic_summary": semantic_summary,
             "style_summary": style_summary,
+            "layout_summary": layout_summary,
             "performance_summary": performance_summary,
             "console_entries": collectors["console_entries"],
             "console_errors": collectors["console_errors"],
@@ -1028,6 +1187,7 @@ class FrontendHarness:
         url: str,
         semantic_summary: dict[str, Any],
         style_summary: dict[str, Any],
+        layout_summary: dict[str, Any],
         current_issues: list[str],
     ) -> dict[str, Any]:
         if self.vision_client is None:
@@ -1049,7 +1209,7 @@ class FrontendHarness:
             {json.dumps(current_issues[:10], ensure_ascii=False)}
 
             Structured summary:
-            {json.dumps({'semantic_summary': semantic_summary, 'style_summary': style_summary}, ensure_ascii=False)[:9000]}
+            {json.dumps({'semantic_summary': semantic_summary, 'style_summary': style_summary, 'layout_summary': layout_summary}, ensure_ascii=False)[:11000]}
 
             Return strict JSON with keys:
             - summary: string
@@ -1073,6 +1233,7 @@ class FrontendHarness:
         body_text: str,
         semantic_summary: dict[str, Any],
         style_summary: dict[str, Any],
+        layout_summary: dict[str, Any],
         console_errors: list[Any],
         page_errors: list[Any],
         failed_requests: list[Any],
@@ -1108,6 +1269,21 @@ class FrontendHarness:
         if isinstance(primary_button, dict) and isinstance(body_style, dict):
             if primary_button.get("background_color") == body_style.get("background_color"):
                 issues.append("The primary button background matches the page background, so the main CTA may not stand out.")
+        horizontal_overflow = int(layout_summary.get("horizontal_overflow_px") or 0)
+        if horizontal_overflow > 2:
+            issues.append(f"The layout overflows horizontally by {horizontal_overflow}px at this viewport.")
+        overlaps = core.coerce_list(layout_summary.get("overlaps"))
+        if overlaps:
+            issues.append("Important visible elements appear to overlap each other.")
+        clipped_text = core.coerce_list(layout_summary.get("clipped_text"))
+        if clipped_text:
+            issues.append("Some visible text appears clipped or truncated inside its container.")
+        small_targets = core.coerce_list(layout_summary.get("small_interactive_targets"))
+        if len(small_targets) >= 3:
+            issues.append("Several interactive targets are smaller than 32px in one dimension.")
+        empty_actions = core.coerce_list(layout_summary.get("empty_actions"))
+        if empty_actions:
+            issues.append("Some visible interactive elements have no readable text or accessible label.")
         if not buttons and not links and len((body_text or "").strip()) < 80:
             issues.append("The page has very little visible interactive or textual content.")
         return dedupe_strings(issues)
@@ -1537,6 +1713,7 @@ def default_config_toml() -> str:
         [agent]
         max_cycles = 8
         max_tool_steps = 60
+        apply_patch_on_success = false
         read_chunk_lines = 220
         max_file_bytes = 120000
         max_context_chars = 90000
@@ -1610,6 +1787,12 @@ def default_config_toml() -> str:
         wait_until = "load"
         wait_after_load_ms = 1000
         action_timeout_ms = 10000
+        # The automatic review opens every configured page at these viewports.
+        # Keep this small until the loop is stable, then add tablet/wide views as needed.
+        viewports = [
+          { name = "desktop", width = 1440, height = 1024 },
+          { name = "mobile", width = 390, height = 844 },
+        ]
         trace_enabled = true
         screenshot_enabled = true
         full_page_screenshot = true
@@ -1663,6 +1846,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Print a sample config and exit",
     )
+    parser.add_argument(
+        "--apply-on-success",
+        action="store_true",
+        help="Apply the verified final patch back to the source Git repository.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1681,6 +1869,8 @@ def main(argv: list[str] | None = None) -> int:
 
     config_path = pathlib.Path(args.config) if args.config else None
     base_config, frontend_config, vision_config = load_extended_config(config_path)
+    if args.apply_on_success:
+        base_config.apply_patch_on_success = True
     task_text = core.read_task(
         task_file=pathlib.Path(args.task_file) if args.task_file else None,
         task_text=args.task_text,
