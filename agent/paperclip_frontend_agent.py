@@ -9,7 +9,6 @@ import os
 import pathlib
 import sys
 import textwrap
-import time
 import tomllib
 import urllib.error
 import urllib.parse
@@ -35,7 +34,7 @@ class PaperclipConfig:
     cost_provider: str = "vllm"
     cost_cents: int = 0
     max_comment_chars: int = 12000
-    issue_statuses: str = "todo,in_progress,in_review,blocked"
+    issue_statuses: str = "todo,in_progress,in_review"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PaperclipConfig":
@@ -71,6 +70,72 @@ def load_config(path: pathlib.Path | None) -> tuple[core.AgentConfig, frontend.F
 
 class CheckoutConflict(RuntimeError):
     pass
+
+
+class CheckoutBlocked(RuntimeError):
+    def __init__(self, message: str, unresolved_blocker_issue_ids: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.unresolved_blocker_issue_ids = unresolved_blocker_issue_ids or []
+
+
+def valid_uuid_or_none(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return None
+
+
+def resolve_current_run_id(api_url: str, api_key: str, company_id: str, agent_id: str) -> str | None:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": "paperclip-vllm-frontend-agent/0.1",
+    }
+
+    def fetch(path: str) -> Any:
+        req = urllib.request.Request(f"{api_url.rstrip('/')}{path}", headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw.strip() else None
+
+    def rows(payload: Any) -> list[Any]:
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("data", "runs", "items", "results"):
+                if isinstance(payload.get(key), list):
+                    return payload[key]
+            if payload.get("id"):
+                return [payload]
+        return []
+
+    candidates: list[Any] = []
+    for path in (
+        f"/companies/{company_id}/live-runs",
+        f"/companies/{company_id}/heartbeat-runs?agentId={urllib.parse.quote(agent_id)}&limit=20",
+    ):
+        try:
+            candidates.extend(rows(fetch(path)))
+        except Exception:
+            continue
+
+    for run in candidates:
+        if not isinstance(run, dict):
+            continue
+        if run.get("agentId") != agent_id:
+            continue
+        if str(run.get("status") or "").lower() in {"running", "queued"}:
+            resolved = valid_uuid_or_none(str(run.get("id") or ""))
+            if resolved:
+                return resolved
+
+    for run in candidates:
+        if isinstance(run, dict) and run.get("agentId") == agent_id:
+            resolved = valid_uuid_or_none(str(run.get("id") or ""))
+            if resolved:
+                return resolved
+    return None
 
 
 class PaperclipClient:
@@ -120,6 +185,24 @@ class PaperclipClient:
                 return json.loads(raw)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
+            if exc.code == 422 and path.endswith("/checkout"):
+                try:
+                    error_payload = json.loads(detail) if detail.strip() else {}
+                except json.JSONDecodeError:
+                    error_payload = {}
+                if not isinstance(error_payload, dict):
+                    error_payload = {}
+                message = str(error_payload.get("error") or detail or exc.reason)
+                details = error_payload.get("details") if isinstance(error_payload, dict) else {}
+                unresolved = []
+                if isinstance(details, dict):
+                    unresolved = [
+                        str(item)
+                        for item in details.get("unresolvedBlockerIssueIds", [])
+                        if str(item).strip()
+                    ]
+                if "blocked by unresolved blockers" in message.lower() or unresolved:
+                    raise CheckoutBlocked(message, unresolved) from exc
             if exc.code == 409 and path.endswith("/checkout"):
                 raise CheckoutConflict(detail or exc.reason) from exc
             raise RuntimeError(f"HTTP {exc.code} calling {path}: {detail or exc.reason}") from exc
@@ -241,12 +324,19 @@ class HeartbeatContext:
     api_key: str
     company_id: str
     agent_id: str | None
-    run_id: str
+    run_id: str | None
     issue_id: str | None
     wake_reason: str | None
     wake_comment_id: str | None
     approval_id: str | None
     approval_status: str | None
+
+
+def redacted_context(context: HeartbeatContext) -> dict[str, Any]:
+    payload = dataclasses.asdict(context)
+    if payload.get("api_key"):
+        payload["api_key"] = "<redacted>"
+    return payload
 
 
 @dataclasses.dataclass
@@ -463,7 +553,7 @@ class PaperclipRunner:
     def _run_agent(self, task_text: str) -> dict[str, Any]:
         if not self.repo.exists() or not self.repo.is_dir():
             raise RuntimeError(f"Repository path does not exist or is not a directory: {self.repo}")
-        run_base = self.runs_dir if self.runs_dir is not None else (self.repo.parent / f".{self.repo.name}_paperclip_agent_runs")
+        run_base = self.runs_dir if self.runs_dir is not None else self._default_run_base()
         run_root = core.make_run_root(run_base)
         logger = core.JsonlLogger(run_root / "events.jsonl")
         logger.log(
@@ -471,7 +561,7 @@ class PaperclipRunner:
             {
                 "repo": str(self.repo),
                 "run_root": str(run_root),
-                "paperclip_context": dataclasses.asdict(self.context),
+                "paperclip_context": redacted_context(self.context),
                 "agent_config": dataclasses.asdict(self.base_config),
                 "frontend_config": dataclasses.asdict(self.frontend_config),
                 "vision_config": dataclasses.asdict(self.vision_config),
@@ -492,13 +582,23 @@ class PaperclipRunner:
                 vision_config=self.vision_config,
             )
             summary = agent.run()
-            summary["paperclip_context"] = dataclasses.asdict(self.context)
+            summary["paperclip_context"] = redacted_context(self.context)
             summary["usage"] = usage_tracker.snapshot()
             summary_path = pathlib.Path(summary["workspace_root"]).parent / "summary.json"
             summary_path.write_text(core.pretty_json(summary), encoding="utf-8")
             return summary
         finally:
             maybe_restore_usage_tracking()
+
+    def _default_run_base(self) -> pathlib.Path:
+        configured = os.environ.get("PAPERCLIP_AGENT_RUNS_DIR")
+        if configured:
+            return pathlib.Path(configured)
+        agent_id = self.context.agent_id or "default"
+        paperclip_workspaces = pathlib.Path("/paperclip/instances/default/workspaces")
+        if paperclip_workspaces.exists():
+            return paperclip_workspaces / agent_id / "paperclip-agent-runs"
+        return self.repo.parent / f".{self.repo.name}_paperclip_agent_runs"
 
     def _sync_plan_document(self, issue_id: str, summary: dict[str, Any]) -> None:
         if not self.paperclip_config.update_plan_document:
@@ -807,9 +907,17 @@ def main(argv: list[str] | None = None) -> int:
     api_url = args.api_url or os.environ.get("PAPERCLIP_API_URL") or configured_paperclip.api_url
     api_key = args.api_key or os.environ.get("PAPERCLIP_API_KEY") or configured_paperclip.api_key
     company_id = args.company_id or os.environ.get("PAPERCLIP_COMPANY_ID")
-    run_id = args.run_id or os.environ.get("PAPERCLIP_RUN_ID") or f"manual-run-{int(time.time())}"
+    raw_run_id = (
+        args.run_id
+        or os.environ.get("PAPERCLIP_RUN_ID")
+        or os.environ.get("PAPERCLIP_HEARTBEAT_RUN_ID")
+        or os.environ.get("PAPERCLIP_HEARTBEAT_RUN_UUID")
+    )
+    run_id = valid_uuid_or_none(raw_run_id)
     issue_id = args.issue_id or os.environ.get("PAPERCLIP_TASK_ID")
     agent_id = args.agent_id or os.environ.get("PAPERCLIP_AGENT_ID")
+    if run_id is None and api_url and api_key and company_id and agent_id:
+        run_id = resolve_current_run_id(api_url, api_key, company_id, agent_id)
     wake_reason = args.wake_reason or os.environ.get("PAPERCLIP_WAKE_REASON")
     wake_comment_id = args.wake_comment_id or os.environ.get("PAPERCLIP_WAKE_COMMENT_ID")
     approval_id = os.environ.get("PAPERCLIP_APPROVAL_ID")
@@ -851,11 +959,21 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(core.pretty_json(result))
         return 0
+    except CheckoutBlocked as exc:
+        result = {
+            "status": "skipped",
+            "reason": f"Checkout blocked: {exc}",
+            "issue_id": context.issue_id,
+            "run_id": context.run_id,
+            "unresolved_blocker_issue_ids": exc.unresolved_blocker_issue_ids,
+        }
+        print(core.pretty_json(result))
+        return 0
     except Exception as exc:
         error_payload = {
             "status": "error",
             "error": str(exc),
-            "paperclip_context": dataclasses.asdict(context),
+            "paperclip_context": redacted_context(context),
         }
         print(core.pretty_json(error_payload))
         return 1

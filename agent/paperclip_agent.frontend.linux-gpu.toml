@@ -4,16 +4,16 @@ api_key = "dev"
 model = "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 temperature = 0.2
 top_p = 0.95
-max_tokens = 4096
+max_tokens = 768
 request_timeout_sec = 600
 
 [agent]
 max_cycles = 8
 max_tool_steps = 60
 apply_patch_on_success = false
-read_chunk_lines = 220
-max_file_bytes = 120000
-max_context_chars = 90000
+read_chunk_lines = 140
+max_file_bytes = 70000
+max_context_chars = 28000
 tool_command_timeout_sec = 120
 verify_timeout_sec = 1800
 
@@ -96,7 +96,7 @@ screenshot_enabled = true
 full_page_screenshot = true
 review_each_cycle = true
 require_review_before_finish = true
-default_paths = ["/", "/login", "/dashboard"]
+default_paths = ["/"]
 design_brief = """
 Create a product-quality UI with strong hierarchy, obvious CTA emphasis, generous spacing,
 readable typography, consistent radii/shadows, and clear loading/error/empty states.
@@ -136,4 +136,4 @@ report_cost_events = true
 cost_provider = "vllm"
 cost_cents = 0
 max_comment_chars = 12000
-issue_statuses = "todo,in_progress,in_review,blocked"
+issue_statuses = "todo,in_progress,in_review"

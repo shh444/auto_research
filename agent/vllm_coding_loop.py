@@ -1386,17 +1386,57 @@ class CodingAgent:
             {"role": "user", "content": self._build_cycle_user_message(cycle_idx, last_verify_results)},
         ]
         finish_payload: dict[str, Any] | None = None
+        plan_recorded = False
+        tool_counts: dict[str, int] = {}
         for step in range(1, self.config.max_tool_steps + 1):
+            tools = self.tools
+            if plan_recorded:
+                tools = [
+                    item
+                    for item in self.tools
+                    if deep_get(item, "function", "name") != "update_plan"
+                ]
+            tool_limits = {
+                "review_frontend": 2,
+                "browser_actions": 2,
+                "replace_in_file": 4,
+            }
+            for tool_name, limit in tool_limits.items():
+                if tool_counts.get(tool_name, 0) >= limit:
+                    tools = [
+                        item
+                        for item in tools
+                        if deep_get(item, "function", "name") != tool_name
+                    ]
             assistant_message = self.client.chat(
                 messages=messages,
-                tools=self.tools,
+                tools=tools,
                 tool_choice="required",
             )
             tool_calls = assistant_message.get("tool_calls") or []
             if not tool_calls:
-                raise RuntimeError(
-                    "Model returned no tool_calls even though tool_choice='required'"
+                content = str(assistant_message.get("content") or "").strip()
+                self.logger.log(
+                    "assistant_no_tool_calls",
+                    {
+                        "cycle": cycle_idx,
+                        "step": step,
+                        "content": shorten(content, 2000),
+                    },
                 )
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You must respond with a tool call. "
+                            "If a plan is already recorded for this cycle, do not call update_plan again. "
+                            "Use an inspection/edit/check tool, or call finish_iteration if ready or blocked. "
+                            "If exact text replacement keeps failing, switch to write_file with the complete corrected file."
+                        ),
+                    }
+                )
+                continue
             assistant_record = {
                 "role": "assistant",
                 "content": assistant_message.get("content") or "",
@@ -1426,6 +1466,10 @@ class CodingAgent:
                 else:
                     args = {}
                 tool_output = self._handle_tool(name, args, cycle_idx=cycle_idx, step=step)
+                if name:
+                    tool_counts[name] = tool_counts.get(name, 0) + 1
+                if name == "update_plan":
+                    plan_recorded = True
                 messages.append(
                     {
                         "role": "tool",
@@ -1440,9 +1484,11 @@ class CodingAgent:
             if finish_payload is not None:
                 break
         if finish_payload is None:
-            raise RuntimeError(
-                f"Agent failed to call finish_iteration within max_tool_steps={self.config.max_tool_steps}"
-            )
+            return {
+                "status": "blocked",
+                "summary": f"Agent failed to call finish_iteration within max_tool_steps={self.config.max_tool_steps}",
+                "remaining_risks": ["The model did not complete the tool-driven loop."],
+            }
         return finish_payload
 
     def _handle_tool(self, name: str | None, args: dict[str, Any], cycle_idx: int, step: int) -> str:

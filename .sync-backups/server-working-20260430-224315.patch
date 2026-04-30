@@ -1,0 +1,42 @@
+diff --git a/agent/paperclip_agent.frontend.linux-gpu.toml b/agent/paperclip_agent.frontend.linux-gpu.toml
+index 41dfb21..2351840 100644
+--- a/agent/paperclip_agent.frontend.linux-gpu.toml
++++ b/agent/paperclip_agent.frontend.linux-gpu.toml
+@@ -1,5 +1,5 @@
+ [vllm]
+-base_url = "http://vllm:8000/v1"
++base_url = "http://127.0.0.1:8000/v1"
+ api_key = "dev"
+ model = "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+ temperature = 0.2
+diff --git a/compose.paperclip-agent.yml b/compose.paperclip-agent.yml
+index 633aadb..108e319 100644
+--- a/compose.paperclip-agent.yml
++++ b/compose.paperclip-agent.yml
+@@ -2,19 +2,22 @@ services:
+   paperclip:
+     image: paperclip-local-agent:latest
+     container_name: paperclip
+-    ports:
+-      - "${PAPERCLIP_PORT:-3100}:3100"
++    network_mode: host
+     environment:
+-      HOST: "0.0.0.0"
++      HOST: "127.0.0.1"
++      PORT: "${PAPERCLIP_PORT:-3100}"
++      PAPERCLIP_BIND: "loopback"
+       PAPERCLIP_HOME: "/paperclip"
+       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+-      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
++      PAPERCLIP_DEPLOYMENT_MODE: "local_trusted"
+       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
++      BETTER_AUTH_BASE_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+     volumes:
+       - "${PAPERCLIP_DATA_DIR:-./data/docker-paperclip}:/paperclip"
+       - "${FRONTEND_REPO_DIR:?Set FRONTEND_REPO_DIR}:/workspace/repo"
+       - "./agent:/opt/agent"
++    working_dir: /app
+     shm_size: "2gb"

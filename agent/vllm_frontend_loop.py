@@ -873,7 +873,7 @@ class FrontendHarness:
             self.logger.log("frontend_actions_error", result)
             return result
 
-    def render_review_for_model(self, review: dict[str, Any], max_chars: int = 20_000) -> str:
+    def render_review_for_model(self, review: dict[str, Any], max_chars: int = 12_000) -> str:
         if not review.get("ok"):
             return core.pretty_json(review)
         slim = {
@@ -886,6 +886,11 @@ class FrontendHarness:
             "observations": [],
         }
         for obs in review.get("observations", []):
+            if not isinstance(obs, dict):
+                continue
+            vision_review = obs.get("vision_review") or {}
+            if not isinstance(vision_review, dict):
+                vision_review = {"raw_text": str(vision_review)}
             slim["observations"].append(
                 {
                     "name": obs.get("name"),
@@ -915,7 +920,7 @@ class FrontendHarness:
                         "links": core.coerce_list(core.deep_get(obs, "semantic_summary", "links", default=[]))[:8],
                     },
                     "body_text_excerpt": obs.get("body_text_excerpt"),
-                    "vision_review": obs.get("vision_review", {}).get("parsed") or obs.get("vision_review", {}).get("raw_text"),
+                    "vision_review": vision_review.get("parsed") or vision_review.get("raw_text"),
                     "artifacts": obs.get("artifacts"),
                 }
             )
@@ -1446,7 +1451,10 @@ class VisualCodingAgent(core.CodingAgent):
         )
         self.frontend_reviews.append(auto_review)
         self._frontend_review_cycles.add(cycle_idx)
-        review_text = self.frontend.render_review_for_model(auto_review, max_chars=min(24_000, self.config.max_context_chars // 2))
+        review_text = self.frontend.render_review_for_model(
+            auto_review,
+            max_chars=min(6_000, self.config.max_context_chars // 4),
+        )
         return (
             message
             + "\n\nFrontend design brief:\n"
@@ -1467,7 +1475,10 @@ class VisualCodingAgent(core.CodingAgent):
             )
             self.frontend_reviews.append(review)
             self._frontend_review_cycles.add(cycle_idx)
-            return self.frontend.render_review_for_model(review)
+            return self.frontend.render_review_for_model(
+                review,
+                max_chars=min(6_000, self.config.max_context_chars // 4),
+            )
 
         if name == "browser_actions":
             action_result = self.frontend.run_actions(
@@ -1482,7 +1493,7 @@ class VisualCodingAgent(core.CodingAgent):
             )
             self.frontend_actions.append(action_result)
             self._frontend_review_cycles.add(cycle_idx)
-            return core.shorten(core.pretty_json(action_result), 20_000)
+            return core.shorten(core.pretty_json(action_result), 8_000)
 
         if name == "finish_iteration" and self.frontend_config.enabled and self.frontend_config.require_review_before_finish:
             if cycle_idx not in self._frontend_review_cycles:

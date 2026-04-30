@@ -132,4 +132,4 @@ report_cost_events = true
 cost_provider = "vllm"
 cost_cents = 0
 max_comment_chars = 12000
-issue_statuses = "todo,in_progress,in_review,blocked"
+issue_statuses = "todo,in_progress,in_review"
