@@ -1,0 +1,11 @@
+{
+  "adapterType": "process",
+  "adapterConfig": {
+    "command": "python3 /opt/agent/paperclip_frontend_agent.py --config /opt/agent/paperclip_agent.frontend.linux-gpu.toml",
+    "cwd": "/workspace/repo",
+    "timeoutSec": 7200,
+    "env": {
+      "PYTHONUNBUFFERED": "1"
+    }
+  }
+}

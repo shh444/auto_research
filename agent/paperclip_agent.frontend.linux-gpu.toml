@@ -1,0 +1,134 @@
+[vllm]
+base_url = "http://vllm:8000/v1"
+api_key = "dev"
+model = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+temperature = 0.2
+top_p = 0.95
+max_tokens = 4096
+request_timeout_sec = 600
+
+[agent]
+max_cycles = 8
+max_tool_steps = 60
+read_chunk_lines = 220
+max_file_bytes = 120000
+max_context_chars = 90000
+tool_command_timeout_sec = 120
+verify_timeout_sec = 1800
+
+[repo]
+ignore_globs = [
+  ".git/**",
+  ".agent_runs/**",
+  ".venv/**",
+  "venv/**",
+  "node_modules/**",
+  "dist/**",
+  "build/**",
+  ".next/**",
+  ".turbo/**",
+  ".pytest_cache/**",
+  "__pycache__/**",
+]
+include_files = [
+  "README.md",
+  "AGENTS.md",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "vite.config.*",
+  "next.config.*",
+  "src/**",
+  "app/**",
+  "components/**",
+  "pages/**",
+  "public/**",
+]
+
+[commands]
+setup = []
+# Example:
+# setup = ["npm ci"]
+verify = [
+  "npm run lint",
+  "npm run build",
+]
+# Add your own browser or integration verifier if the repo has one, e.g.:
+# verify = [
+#   "npm run lint",
+#   "npm run build",
+#   "npx playwright test --reporter=line",
+# ]
+allow_command_prefixes = []
+blocked_command_patterns = [
+  "(^|[;&|])\\s*sudo\\b",
+  "(^|[;&|])\\s*(shutdown|reboot|halt|poweroff)\\b",
+  "(^|[;&|])\\s*rm\\s+-rf\\s+/",
+  "(^|[;&|])\\s*(mkfs|fdisk|dd)\\b",
+  "(^|[;&|])\\s*(curl|wget)\\b.*\\|\\s*(sh|bash|zsh)\\b",
+  "(^|[;&|])\\s*git\\s+(push|reset\\s+--hard|clean\\s+-fdx|tag\\b)\\b",
+]
+
+[commands.env]
+PYTHONUNBUFFERED = "1"
+
+[frontend]
+enabled = true
+base_url = "http://127.0.0.1:3000"
+start_command = "npm run dev -- --host 127.0.0.1 --port 3000"
+ready_url = "http://127.0.0.1:3000"
+ready_timeout_sec = 120
+browser = "chromium"
+headless = true
+viewport_width = 1440
+viewport_height = 1024
+wait_until = "load"
+wait_after_load_ms = 1000
+action_timeout_ms = 10000
+trace_enabled = true
+screenshot_enabled = true
+full_page_screenshot = true
+review_each_cycle = true
+require_review_before_finish = true
+default_paths = ["/", "/login", "/dashboard"]
+design_brief = """
+Create a product-quality UI with strong hierarchy, obvious CTA emphasis, generous spacing,
+readable typography, consistent radii/shadows, and clear loading/error/empty states.
+Avoid generic starter-template visuals.
+"""
+
+[[frontend.pages]]
+path = "/"
+name = "home"
+
+[[frontend.pages]]
+path = "/login"
+name = "login"
+wait_for_text = "Sign in"
+
+[[frontend.pages]]
+path = "/dashboard"
+name = "dashboard"
+
+[vision]
+enabled = false
+base_url = "http://localhost:8001/v1"
+api_key = "dev"
+model = "Qwen/Qwen2.5-VL-7B-Instruct"
+temperature = 0.1
+top_p = 0.9
+max_tokens = 1200
+
+[paperclip]
+enabled = true
+success_status = "done"
+failure_status = "blocked"
+upload_artifacts = true
+upload_review_assets = false
+update_plan_document = true
+report_cost_events = true
+cost_provider = "vllm"
+cost_cents = 0
+max_comment_chars = 12000
+issue_statuses = "todo,in_progress,in_review,blocked"
